@@ -212,7 +212,7 @@ func internalError(ws *websocket.Conn, msg string, err error) {
 }
 
 func startengine(ws *websocket.Conn,name string,myconnid uint64){
-	log.Printf("\nstarting engine, name: %s , myconnid: %v\n",name,myconnid)
+	log.Printf("\nstarting engine , name: %s , myconnid: %v\n",name,myconnid)
 
 	index,found:=findbyname(name)
 
@@ -254,6 +254,14 @@ func startengine(ws *websocket.Conn,name string,myconnid uint64){
 	processw=inw
 
 	log.Println("process started")
+
+	config:=engines[index].Config
+
+	message := append([]byte(config),'\n')
+
+	if _ , err := processw.Write(message); err==nil {
+		log.Printf("\nissued config: %s",config)
+	}
 
 	stdoutDone := make(chan struct{})
 	go pumpStdout(ws, outr, stdoutDone, myconnid)
