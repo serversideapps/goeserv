@@ -4,9 +4,23 @@ import (
 	"fmt"
 	"net/http"
 	"encoding/json"    
-    "io/ioutil"
-    "os"
-    "strings"
+	"io/ioutil"
+	"os"
+	"strings"
+
+	"sync/atomic"
+
+	/*"sync"		
+	"os/exec"*/
+
+	"bufio"	
+	"io"
+
+	"flag"	
+	"log"	
+	"time"
+
+	"github.com/gorilla/websocket"
 )
 
 type Engine struct {
@@ -14,6 +28,51 @@ type Engine struct {
     Path    string `json:"path"`
     Config  string `json:"config"`
 }
+
+type EngineMessage struct {
+    Action     string   `json:"action"`
+    Name       string   `json:"name"`
+    Command    string   `json:"command"`
+    Buffer     string   `json:"buffer"`
+    Available  []string `json:"available"`
+}
+
+var (
+	engines []Engine
+
+	addr               = flag.String("addr", "127.0.0.1:9000", "http service address")
+
+	upgrader           = websocket.Upgrader{
+    ReadBufferSize:  1024,
+    WriteBufferSize: 1024,
+    CheckOrigin: func(r *http.Request) bool {
+        return true
+    },
+}
+
+	connid  uint64      = 0
+
+	process *os.Process = nil
+
+	processw io.Writer  = nil
+)
+
+const (
+	// Time allowed to write a message to the peer.
+	writeWait = 10 * time.Second
+
+	// Maximum message size allowed from peer.
+	maxMessageSize = 8192
+
+	// Time allowed to read the next pong message from the peer.
+	pongWait = 60 * time.Second
+
+	// Send pings to peer with this period. Must be less than pongWait.
+	pingPeriod = (pongWait * 9) / 10
+
+	// Time to wait before force close on connection.
+	closeGracePeriod = 10 * time.Second
+)
 
 func getEngines() []Engine {
     raw, err := ioutil.ReadFile("./engines.json")
@@ -26,10 +85,6 @@ func getEngines() []Engine {
     json.Unmarshal(raw, &c)
     return c
 }
-
-var (
-	engines []Engine
-)
 
 func createIndex(iname string,ipath string,iconfig string) string {
 	var body string
@@ -134,6 +189,162 @@ func deleteHandler(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprintf(w, createIndex("","",""))
 }
 
+func logem(em EngineMessage){
+	log.Printf("\naction: %v\ncommand: %v\nbuffer: %v\navailable: %v\n",em.Action,em.Command,em.Buffer,em.Available)
+}
+
+func sendem(em EngineMessage,ws *websocket.Conn,myconnid uint64,dolog bool){
+	if dolog {
+		log.Printf("\nmyconnid: %d , sending message\n",myconnid)
+		logem(em)
+	}
+
+	jsonbytes, err := json.Marshal(em)
+
+    if err == nil {
+		ws.WriteMessage(websocket.TextMessage, jsonbytes)
+    }
+}
+
+func internalError(ws *websocket.Conn, msg string, err error) {
+	log.Println(msg, err)
+	ws.WriteMessage(websocket.TextMessage, []byte("Internal server error."))
+}
+
+func startengine(ws *websocket.Conn,name string,myconnid uint64){
+	log.Printf("\nstarting engine, name: %s , myconnid: %v\n",name,myconnid)
+
+	index,found:=findbyname(name)
+
+	if !found {
+		log.Println("error: engine not found")
+		return
+	}
+
+	if process != nil {
+		log.Println("killing previous process")
+		process.Kill()
+	}
+
+	path:=engines[index].Path
+
+	outr, outw, err := os.Pipe()
+	if err != nil {
+		internalError(ws, "stdout:", err)
+		return
+	}	
+
+	inr, inw, err := os.Pipe()
+	if err != nil {
+		internalError(ws, "stdin:", err)
+		return
+	}
+
+	proc, err := os.StartProcess(path, flag.Args(), &os.ProcAttr{
+		Files: []*os.File{inr, outw, outw},
+	})
+
+	if err != nil {		
+		internalError(ws, "start:", err)
+		return
+	}
+
+	process=proc
+
+	processw=inw
+
+	log.Println("process started")
+
+	stdoutDone := make(chan struct{})
+	go pumpStdout(ws, outr, stdoutDone, myconnid)
+}
+
+func pumpStdout(ws *websocket.Conn, r io.Reader, done chan struct{},myconnid uint64) {
+	defer func() {
+	}()
+
+	s := bufio.NewScanner(r)
+
+	for s.Scan() {
+		ws.SetWriteDeadline(time.Now().Add(writeWait))
+
+		var em EngineMessage
+
+		em.Action="thinkingoutput"
+		em.Buffer=string(s.Bytes())
+
+		sendem(em,ws,myconnid,false)
+	}
+
+	if s.Err() != nil {
+		log.Println("scan:", s.Err())
+	}
+
+	close(done)
+
+	ws.SetWriteDeadline(time.Now().Add(writeWait))
+	ws.WriteMessage(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""))
+	time.Sleep(closeGracePeriod)
+	ws.Close()
+}
+
+func pumpStdin(ws *websocket.Conn,myconnid uint64) {
+	defer ws.Close()
+	ws.SetReadLimit(maxMessageSize)
+	ws.SetReadDeadline(time.Now().Add(pongWait))
+	ws.SetPongHandler(func(string) error { ws.SetReadDeadline(time.Now().Add(pongWait)); return nil })
+	for {
+		_, message, err := ws.ReadMessage()
+		if err != nil {
+			break
+		}		
+
+		var em EngineMessage
+    	json.Unmarshal(message, &em)
+
+		log.Printf("\nmyconnid: %d\nraw message: %v\n",myconnid,string(message))
+		logem(em)
+
+		if em.Action=="sendavailable" {
+			var am EngineMessage
+			am.Action="available"
+			var available []string
+			for _,e := range engines {
+				available=append(available,e.Name)
+			}
+			am.Available=available
+
+			sendem(am,ws,myconnid,true)
+		}
+
+		if em.Action=="start" {
+			startengine(ws,em.Name,myconnid)
+		}
+
+		if em.Action=="issue" {
+			message = append([]byte(em.Command),'\n')
+
+			if _, err := processw.Write(message); err != nil {
+				break
+			}
+		}
+
+	}
+}
+
+func serveWs(w http.ResponseWriter, r *http.Request) {
+	ws, err := upgrader.Upgrade(w, r, nil)
+	if err != nil {
+		log.Println("upgrade:", err)
+		return
+	}
+
+	atomic.AddUint64(&connid, 1)
+
+	defer ws.Close()
+
+	pumpStdin(ws,connid)
+}
 
 func main() {
 	
@@ -144,6 +355,8 @@ func main() {
 	http.HandleFunc("/change", changeHandler)
 	http.HandleFunc("/edit", editHandler)
 	http.HandleFunc("/delete", deleteHandler)
+
+	http.HandleFunc("/ws", serveWs)
 
 	engines = getEngines()
 
