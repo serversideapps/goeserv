@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
+	"github.com/gorilla/mux"
 )
 
 type Engine struct {
@@ -358,15 +359,22 @@ func main() {
 	
 	fmt.Print("goeserv - the golang engine server\n")
 
-	http.HandleFunc("/", indexHandler)
+	r := mux.NewRouter()
 
-	http.HandleFunc("/change", changeHandler)
-	http.HandleFunc("/edit", editHandler)
-	http.HandleFunc("/delete", deleteHandler)
+	r.HandleFunc("/", indexHandler).Methods("GET")
 
-	http.HandleFunc("/ws", serveWs)
+	r.HandleFunc("/change", changeHandler).Methods("POST")
+	r.HandleFunc("/edit", editHandler).Methods("POST")
+	r.HandleFunc("/delete", deleteHandler).Methods("POST")
+
+	r.HandleFunc("/assets/{assettype}/{assetname}", assetsHandler).Methods("GET")
+	r.HandleFunc("/assets/{assettype}/{assetsubtype}/{assetname}", subassetsHandler).Methods("GET")
+
+	r.HandleFunc("/ws", serveWs).Schemes("ws")
 
 	engines = getEngines()
+
+	http.Handle("/",r)
 
 	http.ListenAndServe(":9000", nil)
 
