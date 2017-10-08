@@ -90,12 +90,18 @@ func getEngines() []Engine {
 func createIndex(iname string,ipath string,iconfig string) string {
 	var body string
 
+	body+="<a href=/db>Presentations</a>\n"
+
+	body+="<hr>\n"
+
 	body+="<form method=post action='/change'><table>"
 	body+="<tr><td>Name</td><td><input id=name name=name type=text value='"+iname+"'></td>"
 	body+="<tr><td>Path</td><td><input id=path name=path type=text value='"+ipath+"'></td>"
 	body+="<tr><td>Config</td><td><textarea id=config name=config cols=80 rows=5>"+iconfig+"</textarea></td>"
 	body+="<tr><td></td><td><input type=submit value=Submit></td>"
 	body+="</table></form>"
+
+	body+="<hr>\n"
 
 	body+="<table border=1 cellpadding=3 cellspacing=3>"
 	body+="<tr><td>No.</td><td>Name</td>"
@@ -342,6 +348,7 @@ func pumpStdin(ws *websocket.Conn,myconnid uint64) {
 }
 
 func serveWs(w http.ResponseWriter, r *http.Request) {
+	fmt.Println("serveWs!")
 	ws, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
 		log.Println("upgrade:", err)
@@ -367,10 +374,19 @@ func main() {
 	r.HandleFunc("/edit", editHandler).Methods("POST")
 	r.HandleFunc("/delete", deleteHandler).Methods("POST")
 
+	///////////////////////////////////////////////////////////////////////
+	// gocserv
+
 	r.HandleFunc("/assets/{assettype}/{assetname}", assetsHandler).Methods("GET")
 	r.HandleFunc("/assets/{assettype}/{assetsubtype}/{assetname}", subassetsHandler).Methods("GET")
 
-	r.HandleFunc("/ws", serveWs).Schemes("ws")
+	r.HandleFunc("/db", serveDb).Methods("GET")
+	r.HandleFunc("/presentation/{presid}", servePresentation).Methods("GET")
+	r.HandleFunc("/analysis/{presid}", servePresentation).Methods("GET")
+
+	///////////////////////////////////////////////////////////////////////
+
+	r.HandleFunc("/ws", serveWs)
 
 	engines = getEngines()
 
