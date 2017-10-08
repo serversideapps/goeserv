@@ -90,7 +90,8 @@ func getEngines() []Engine {
 func createIndex(iname string,ipath string,iconfig string) string {
 	var body string
 
-	body+="<a href=/db>Presentations</a>\n"
+	body+="<a href=/db>Presentations</a> | \n"
+	body+="<a href=/newpres>New presentation</a>\n"
 
 	body+="<hr>\n"
 
@@ -312,7 +313,18 @@ func pumpStdin(ws *websocket.Conn,myconnid uint64) {
 		_, message, err := ws.ReadMessage()
 		if err != nil {
 			break
-		}		
+		}
+
+		parts:=strings.Split(string(message)," ")
+		if parts[0]=="StorePresentationMessage" {
+			storePresentation(ws,strings.Join(parts[1:]," "))
+			break
+		}
+
+		if parts[0]=="SendTableMessage" {
+			log.Printf("%v ignored",parts[0])
+			break
+		}
 
 		var em EngineMessage
     	json.Unmarshal(message, &em)
@@ -348,7 +360,6 @@ func pumpStdin(ws *websocket.Conn,myconnid uint64) {
 }
 
 func serveWs(w http.ResponseWriter, r *http.Request) {
-	fmt.Println("serveWs!")
 	ws, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
 		log.Println("upgrade:", err)
@@ -381,6 +392,7 @@ func main() {
 	r.HandleFunc("/assets/{assettype}/{assetsubtype}/{assetname}", subassetsHandler).Methods("GET")
 
 	r.HandleFunc("/db", serveDb).Methods("GET")
+	r.HandleFunc("/newpres", newPres).Methods("GET")
 	r.HandleFunc("/presentation/{presid}", servePresentation).Methods("GET")
 	r.HandleFunc("/analysis/{presid}", servePresentation).Methods("GET")
 

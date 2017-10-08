@@ -4,6 +4,7 @@ import(
 	"fmt"
 	"net/http"
 	"github.com/gorilla/mux"
+	"github.com/gorilla/websocket"
 	"os"
 	"path/filepath"
 	"mime"
@@ -11,12 +12,16 @@ import(
 	"strings"
 	"gopkg.in/mgo.v2"
 	"gopkg.in/mgo.v2/bson"
+	"encoding/json"
+	"log"
 )
 
-var(
+var(	
 	ASSETS_PATH string = os.Getenv("GOCSERV_ASSETS_PATH")	
 	MONGODB_URI        = "mongodb://localhost:27017"
 	FIND_MAX           = 500
+	GAMES_COLLECTION   = "gamesgolang"
+
 	TRANSLATIONS map[string]string = map[string]string{		
 		"presentation.engine":"Engine",
 		"presentation.hybernate":"Hybernate",
@@ -115,39 +120,105 @@ func servAssets(w http.ResponseWriter, r *http.Request, path string) {
 }
 
 type User struct {
-	Handle string        
-	Rating float64
-	Rd float64
-	Email string                
+	Handle string   `json:"handle"`
+	Rating float64  `json:"rating"`
+	Rd float64      `json:"rd"`
+	Email string    `json:"email"`
 }
 
 type Presentation struct {
-	Id string
-	Title string
-	Owner string
-	Pgn string
+	Id string                     `json:"id"`
+	Title string                  `json:"title"`
+	Owner string                  `json:"owner"`
+	Pgn string                    `json:"pgn"`
+	Currentlinealgeb string       `json:"currentlinealgeb"`
+	Version int                   `json:"version"`
+	Book Book                     `json:"book"`
+	Flip bool                     `json:"flip"`
+}
+
+func (pr *Presentation) checksanity() {
+	pr.Book.checksanity()
 }
 
 type Game struct {
-	Presentationid string
-	Presentationtitle string
+	Presentationid string     `json:"presentationid"`
+	Presentationtitle string  `json:"presentationtitle"`
 }
 
 type GameWithPresentation struct {
-	Presentationid string
-	Presentationtitle string
-	Presentation string
+	Presentationid string       `json:"presentationid"`
+	Presentationtitle string    `json:"presentationtitle"`
+	Presentation Presentation   `json:"presentation"`
+}
+
+type StorePresentationMessage struct {
+	Presid string                `json:"presid"`
+	Presg GameWithPresentation   `json:"presg"`
+}
+
+type BookMove struct {
+	Fen string                  `json:"fen"`
+	San string                  `json:"san"`
+	Annot string                `json:"annot"`
+	Comment string              `json:"comment"`
+	Open bool                   `json:"open"`
+	Hasscore bool               `json:"hasscore"`
+	Scorecp bool                `json:"scorecp"`
+	Scoremate bool              `json:"scoremate"`
+	Score int                   `json:"score"`
+	Depth int                   `json:"depth"`
+}
+
+func (bm *BookMove) checksanity() {
+	if (!bm.Scorecp) && (!bm.Scoremate){
+		bm.Scorecp=true
+	}
+}
+
+type BookPosition struct {
+	Fen string                  `json:"fen"`
+	Moves map[string]BookMove   `json:"moves"`
+	Notes string                `json:"notes"`
+	Arrowalgebs []string        `json:"arrowalgebs"`
+}
+
+func (bp *BookPosition) checksanity() {
+	newmoves:=map[string]BookMove{}
+	for san , bm := range bp.Moves {
+		bm.checksanity()
+		newmoves[san]=bm
+	}
+	bp.Moves=newmoves
+}
+
+type Book struct {
+	Positions map[string]BookPosition    `json:"positions"`
+	Essay string                         `json:"essay"`
+}
+
+func (bk *Book) checksanity() {
+	newpositions:=map[string]BookPosition{}
+	for fen , bp := range bk.Positions {
+		bp.checksanity()
+		newpositions[fen]=bp
+	}
+	bk.Positions=newpositions
 }
 
 func dbError(w http.ResponseWriter) {
 	fmt.Fprintf(w, "db error")
 }
 
+func dbStoreError() {
+	log.Println("db store error")
+}
+
 func serveDb(w http.ResponseWriter, r *http.Request) {
 	session, err := mgo.Dial(MONGODB_URI)
     if err == nil {
     	defer session.Close()        
-        c := session.DB("users").C("games")
+        c := session.DB("users").C(GAMES_COLLECTION)
         result := []Game{}
         c.Find(nil).Limit(FIND_MAX).Iter().All(&result)
         for _ , g:=range result {
@@ -156,6 +227,14 @@ func serveDb(w http.ResponseWriter, r *http.Request) {
     } else {
     	dbError(w)
     }        
+}
+
+func newPres(w http.ResponseWriter, r *http.Request) {
+	gwp:=GameWithPresentation{}
+	gwp.Presentation.Title="Chessapp Presentation"
+	gwp.Presentation.Version=0
+	gwp.Presentation.Book=Book{Positions:map[string]BookPosition{}}
+	fmt.Fprint(w,presHtml(gwp))
 }
 
 func translationsjson() string {
@@ -173,6 +252,45 @@ func translationsjson() string {
 	return body
 }
 
+func presHtml(gwp GameWithPresentation) string {
+	presgbytes, err := json.Marshal(gwp)
+	if err!=nil {
+		log.Printf("json marshal error in %v\n",gwp)
+	}
+	chessconfig:="{\"kind\":\"analysis\",\"translations\":"+translationsjson()+",\"presgame\":"+string(presgbytes)+"}"
+    user:=""
+    title:=""
+    piecetype:=""
+    scriptversionstr:="103"
+
+    html:="<!DOCTYPE html>\n"
+    html+="<html lang='en'>\n"
+
+    html+="<head>\n"
+    html+="<meta charset='utf-8'>\n"
+	html+="<meta http-equiv='X-UA-Compatible' content='IE=edge'>\n"
+	html+="<meta name='viewport' content='width=device-width, initial-scale=1'>\n"
+	html+="<link rel='shortcut icon' type='image/png' href=/assets/images/favicon.png>\n"	
+	html+="<title>"+title+"</title>\n"
+	html+="<link rel='stylesheet' href=/assets/stylesheets/reset.css>\n"
+	html+="<link rel='stylesheet' href=/assets/stylesheets/main.css>\n"
+	html+="<link rel='stylesheet' href=/assets/stylesheets/piece/alpha.css>\n"
+	html+="<link rel='stylesheet' href=/assets/stylesheets/piece/merida.css>\n"
+    html+="</head>\n"
+
+    html+="<body>\n"
+    html+="<div id='chessconfig' style='visibility: hidden; width: 0px; height: 0px;''>"+chessconfig+"</div>\n"        
+    html+="<div id='root' admin='false' user='"+user+"'' viewid='chess' viewserialized='' piecetype='"+piecetype+"'></div>\n"
+    html+="<div id='info' style='position: relative;'>Loading board...</div>\n"
+    html+="<script src=/assets/javascripts/client-jsdeps.min.js?v"+scriptversionstr+"></script>\n"
+	html+="<script src=/assets/javascripts/client-opt.js?v"+scriptversionstr+"></script>\n"
+    html+="</body>\n"
+
+    html+="</html>\n"
+
+    return html
+}
+
 func servePresentation(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	presid:=vars["presid"]
@@ -180,39 +298,18 @@ func servePresentation(w http.ResponseWriter, r *http.Request) {
 	session, err := mgo.Dial(MONGODB_URI)
     if err == nil {
     	defer session.Close()        
-        c := session.DB("users").C("games")
-        result := GameWithPresentation{}
-        c.Find(bson.M{"presentationid":presid}).One(&result)
+        c := session.DB("users").C(GAMES_COLLECTION)
+        gwp := GameWithPresentation{}
+        err := c.Find(bson.M{"presentationid":presid}).One(&gwp)
 
-        chessconfig:="{\"kind\":\"analysis\",\"translations\":"+translationsjson()+"}"
-        user:=""
-        title:=""
-        piecetype:=""
-        scriptversion:=103
+        if err!=nil {
+        	dbError(w)
+        	return
+        }        
 
-        html:="<html>\n"
+        gwp.Presentation.checksanity()        
 
-        html+="<head>\n"
-        html+="<meta charset='utf-8'>\n"
-		html+="<meta http-equiv='X-UA-Compatible' content='IE=edge'>\n"
-		html+="<meta name='viewport' content='width=device-width, initial-scale=1'>\n"
-		html+="<link rel='shortcut icon' type='image/png' href=/assets/images/favicon.png>\n"	
-		html+="<title>"+title+"</title>\n"
-		html+="<link rel='stylesheet' href=/assets/stylesheets/reset.css>\n"
-		html+="<link rel='stylesheet' href=/assets/stylesheets/main.css>\n"
-		html+="<link rel='stylesheet' href=/assets/stylesheets/piece/alpha.css>\n"
-		html+="<link rel='stylesheet' href=/assets/stylesheets/piece/merida.css>\n"
-        html+="</head>\n"
-
-        html+="<body>\n"
-        html+="<div id='chessconfig' style='visibility: hidden; width: 0px; height: 0px;''>"+chessconfig+"</div>\n"        
-        html+="<div id='root' admin='false' user='"+user+"'' viewid='chess' viewserialized='' piecetype='"+piecetype+"'></div>\n"
-        html+="<div id='info' style='position: relative;'>Loading board...</div>\n"
-        html+="<script src=/assets/javascripts/client-jsdeps.min.js?v"+string(scriptversion)+"></script>\n"
-		html+="<script src=/assets/javascripts/client-opt.js?v"+string(scriptversion)+"></script>\n"
-        html+="</body>\n"
-
-        html+="</html>\n"
+        html:=presHtml(gwp)
 
 		fmt.Fprintf(w, "%v", html)
     } else {
@@ -230,3 +327,37 @@ func subassetsHandler(w http.ResponseWriter, r *http.Request) {
 	servAssets(w,r,subassetpath(vars["assettype"],vars["assetsubtype"],vars["assetname"]))
 }
 
+func storePresentation(ws *websocket.Conn,message string){
+	var spm StorePresentationMessage
+    err := json.Unmarshal([]byte(message), &spm)
+
+    if err != nil {
+		fmt.Printf("store pres unmarshal error in : %v",message)    	
+		return
+    }
+
+    presid:=spm.Presid
+    presg:=spm.Presg
+
+    pres:=presg.Presentation
+
+    prestitle:=pres.Title
+    
+	fmt.Printf("store pres : %v\nmessage : %v\n",presid,message)
+
+	session, err := mgo.Dial(MONGODB_URI)
+    if err == nil {
+    	defer session.Close()        
+        c := session.DB("users").C(GAMES_COLLECTION)
+        doc:=bson.M{
+        	"_id":presid,
+        	"presentationid":presid,
+        	"presentationtitle":prestitle,
+        	"presentation":pres,
+        }
+        c.Upsert(bson.M{"_id":presid},doc)
+        ws.WriteMessage(websocket.TextMessage, []byte("StorePresentationResultMessage {\"success\":true}"))
+    } else {
+    	dbStoreError()
+    }        
+}
