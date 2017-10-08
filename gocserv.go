@@ -14,12 +14,18 @@ import(
 	"gopkg.in/mgo.v2/bson"
 	"encoding/json"
 	"log"
+	"strconv"
 )
 
+///////////////////////////////////////////////////////////////////////////
+
 var(	
+	VERSION            = 105
+
 	ASSETS_PATH string = os.Getenv("GOCSERV_ASSETS_PATH")	
 	MONGODB_URI        = "mongodb://localhost:27017"
 	FIND_MAX           = 500
+	USERS_DATABASE     = "usersgolang"
 	GAMES_COLLECTION   = "gamesgolang"
 
 	TRANSLATIONS map[string]string = map[string]string{		
@@ -90,6 +96,8 @@ var(
 	}
 )
 
+///////////////////////////////////////////////////////////////////////////
+
 func pathfromparts(parts []string) string {
 	return strings.Join(parts,string(filepath.Separator))
 }
@@ -107,34 +115,40 @@ func subassetpath(assettype string,assetsubtype string,assetname string) string 
 }
 
 func servAssets(w http.ResponseWriter, r *http.Request, path string) {
-	ext:=filepath.Ext(path)
-	mimetype:=mime.TypeByExtension(ext)	
+	ext := filepath.Ext(path)
+	mimetype := mime.TypeByExtension(ext)	
+
 	content, err := os.Open(path)
+
     if err == nil {
         defer content.Close()
 	    w.Header().Set("Content-Type", mimetype)
 	    io.Copy(w, content)
     } else {
-    	fmt.Fprintf(w, "Not Found - path %v ext %v mine %v",path,ext,mimetype)
+    	fmt.Fprintf(w, "Not Found 404 [ info : path %v ext %v mine %v ]",path,ext,mimetype)
     }
 }
 
+///////////////////////////////////////////////////////////////////////////
+
 type User struct {
-	Handle string   `json:"handle"`
-	Rating float64  `json:"rating"`
-	Rd float64      `json:"rd"`
-	Email string    `json:"email"`
+	Handle   string   `json:"handle"`
+	Rating   float64  `json:"rating"`
+	Rd       float64  `json:"rd"`
+	Email    string   `json:"email"`
 }
 
 type Presentation struct {
-	Id string                     `json:"id"`
-	Title string                  `json:"title"`
-	Owner string                  `json:"owner"`
-	Pgn string                    `json:"pgn"`
-	Currentlinealgeb string       `json:"currentlinealgeb"`
-	Version int                   `json:"version"`
-	Book Book                     `json:"book"`
-	Flip bool                     `json:"flip"`
+	Id                 string     `json:"id"`
+	Title              string     `json:"title"`
+	Owner              string     `json:"owner"`
+	Pgn                string     `json:"pgn"`
+	Currentlinealgeb   string     `json:"currentlinealgeb"`
+	Version            int        `json:"version"`
+	Book               Book       `json:"book"`
+	Flip               bool       `json:"flip"`
+	Candelete          string     `json:"candelete"`
+	Canedit            string     `json:"canedit"`
 }
 
 func (pr *Presentation) checksanity() {
@@ -142,32 +156,32 @@ func (pr *Presentation) checksanity() {
 }
 
 type Game struct {
-	Presentationid string     `json:"presentationid"`
-	Presentationtitle string  `json:"presentationtitle"`
+	Presentationid     string  `json:"presentationid"`
+	Presentationtitle  string  `json:"presentationtitle"`
 }
 
 type GameWithPresentation struct {
-	Presentationid string       `json:"presentationid"`
-	Presentationtitle string    `json:"presentationtitle"`
-	Presentation Presentation   `json:"presentation"`
+	Presentationid     string        `json:"presentationid"`
+	Presentationtitle  string        `json:"presentationtitle"`
+	Presentation       Presentation  `json:"presentation"`
 }
 
 type StorePresentationMessage struct {
-	Presid string                `json:"presid"`
-	Presg GameWithPresentation   `json:"presg"`
+	Presid  string                `json:"presid"`
+	Presg   GameWithPresentation  `json:"presg"`
 }
 
 type BookMove struct {
-	Fen string                  `json:"fen"`
-	San string                  `json:"san"`
-	Annot string                `json:"annot"`
-	Comment string              `json:"comment"`
-	Open bool                   `json:"open"`
-	Hasscore bool               `json:"hasscore"`
-	Scorecp bool                `json:"scorecp"`
-	Scoremate bool              `json:"scoremate"`
-	Score int                   `json:"score"`
-	Depth int                   `json:"depth"`
+	Fen        string       `json:"fen"`
+	San        string       `json:"san"`
+	Annot      string       `json:"annot"`
+	Comment    string       `json:"comment"`
+	Open       bool         `json:"open"`
+	Hasscore   bool         `json:"hasscore"`
+	Scorecp    bool         `json:"scorecp"`
+	Scoremate  bool         `json:"scoremate"`
+	Score      int          `json:"score"`
+	Depth      int          `json:"depth"`
 }
 
 func (bm *BookMove) checksanity() {
@@ -177,10 +191,10 @@ func (bm *BookMove) checksanity() {
 }
 
 type BookPosition struct {
-	Fen string                  `json:"fen"`
-	Moves map[string]BookMove   `json:"moves"`
-	Notes string                `json:"notes"`
-	Arrowalgebs []string        `json:"arrowalgebs"`
+	Fen          string                `json:"fen"`
+	Moves        map[string]BookMove   `json:"moves"`
+	Notes        string                `json:"notes"`
+	Arrowalgebs  []string              `json:"arrowalgebs"`
 }
 
 func (bp *BookPosition) checksanity() {
@@ -193,8 +207,8 @@ func (bp *BookPosition) checksanity() {
 }
 
 type Book struct {
-	Positions map[string]BookPosition    `json:"positions"`
-	Essay string                         `json:"essay"`
+	Positions  map[string]BookPosition    `json:"positions"`
+	Essay      string                     `json:"essay"`
 }
 
 func (bk *Book) checksanity() {
@@ -206,8 +220,10 @@ func (bk *Book) checksanity() {
 	bk.Positions=newpositions
 }
 
-func dbError(w http.ResponseWriter) {
-	fmt.Fprintf(w, "db error")
+///////////////////////////////////////////////////////////////////////////
+
+func dbError(w http.ResponseWriter,comment string) {
+	fmt.Fprintf(w, "db error "+comment)
 }
 
 func dbStoreError() {
@@ -218,28 +234,54 @@ func serveDb(w http.ResponseWriter, r *http.Request) {
 	session, err := mgo.Dial(MONGODB_URI)
     if err == nil {
     	defer session.Close()        
-        c := session.DB("users").C(GAMES_COLLECTION)
-        result := []Game{}
+
+        c := session.DB(USERS_DATABASE).C(GAMES_COLLECTION)
+
+        result := []GameWithPresentation{}
+
         c.Find(nil).Limit(FIND_MAX).Iter().All(&result)
+
+        html:="<html><head></head><body><table cellpadding=3 cellspacing=3>"
+
         for _ , g:=range result {
-			fmt.Fprintf(w, "<a href=/presentation/%v>%v</a><br>", g.Presentationid, g.Presentationtitle)
+        	pres := g.Presentation
+        	presid := pres.Id
+
+        	html+="<tr>"
+        	html+=fmt.Sprintf("<td><a href=/presentation/%v>%v</a></td>", presid, g.Presentationtitle)
+        	if pres.Canedit=="no" {
+        		html+="<td>Hybernated</td>"
+        	} else if pres.Candelete=="no" {
+        		html+="<td>Archived</td>"
+    		} else {
+    			html+=fmt.Sprintf("<td><a href=/presentation/delete/%v>Delete</a></td>",presid)
+    		}
+			html+="</tr>"
 		}
+
+		html+="</table></body></html>"
+
+		fmt.Fprint(w,html)
     } else {
-    	dbError(w)
+    	dbError(w,"serving presentation list")
     }        
 }
 
 func newPres(w http.ResponseWriter, r *http.Request) {
-	gwp:=GameWithPresentation{}
-	gwp.Presentation.Title="Chessapp Presentation"
-	gwp.Presentation.Version=0
-	gwp.Presentation.Book=Book{Positions:map[string]BookPosition{}}
-	fmt.Fprint(w,presHtml(gwp))
+	gwp := GameWithPresentation{}
+
+	gwp.Presentation.Title   = "Chessapp Presentation"
+	gwp.Presentation.Version = 0
+	gwp.Presentation.Book    = Book{Positions:map[string]BookPosition{}}
+
+	fmt.Fprint(w,presHtml(gwp,-1))
 }
 
 func translationsjson() string {
-	first:=true
+	first := true
+
 	body:="{"
+
 	for k , v := range TRANSLATIONS {
 		if first {
 			first=false
@@ -248,20 +290,25 @@ func translationsjson() string {
 		}
 		body+="\""+k+"\":\""+v+"\""
 	}
+
 	body+="}"
+
 	return body
 }
 
-func presHtml(gwp GameWithPresentation) string {
-	presgbytes, err := json.Marshal(gwp)
-	if err!=nil {
+func presHtml(gwp GameWithPresentation,currentnodeid int) string {
+	presgbytes , err := json.Marshal(gwp)
+
+	if err != nil {
 		log.Printf("json marshal error in %v\n",gwp)
 	}
-	chessconfig:="{\"kind\":\"analysis\",\"translations\":"+translationsjson()+",\"presgame\":"+string(presgbytes)+"}"
+
+	chessconfig:="{\"kind\":\"analysis\",\"currentnodeid\":"+strconv.Itoa(currentnodeid)+",\"translations\":"+translationsjson()+",\"presgame\":"+string(presgbytes)+"}"
+
     user:=""
     title:=""
     piecetype:=""
-    scriptversionstr:="103"
+    scriptversionstr:=strconv.Itoa(VERSION)
 
     html:="<!DOCTYPE html>\n"
     html+="<html lang='en'>\n"
@@ -293,27 +340,58 @@ func presHtml(gwp GameWithPresentation) string {
 
 func servePresentation(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
-	presid:=vars["presid"]
+	presid := vars["presid"]
 
-	session, err := mgo.Dial(MONGODB_URI)
+	currentnodeid := -1
+
+	parts := strings.Split(presid,"--")
+
+	if len(parts)>1 {		
+		currentnodeid , _ = strconv.Atoi(parts[1])
+		presid = parts[0]
+	}
+
+	session , err := mgo.Dial(MONGODB_URI)
     if err == nil {
     	defer session.Close()        
-        c := session.DB("users").C(GAMES_COLLECTION)
+
+        c := session.DB(USERS_DATABASE).C(GAMES_COLLECTION)
+
         gwp := GameWithPresentation{}
+
         err := c.Find(bson.M{"presentationid":presid}).One(&gwp)
 
-        if err!=nil {
-        	dbError(w)
+        if err != nil {
+        	dbError(w,fmt.Sprintf("finding presentation presid %v currentnodeid %v",presid,currentnodeid))
         	return
         }        
 
         gwp.Presentation.checksanity()        
 
-        html:=presHtml(gwp)
+        html:=presHtml(gwp,currentnodeid)
 
 		fmt.Fprintf(w, "%v", html)
     } else {
-    	dbError(w)
+    	dbError(w,"in serving presentation session")
+    }        
+}
+
+func deletePresentation(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	presid := vars["presid"]
+
+	session, err := mgo.Dial(MONGODB_URI)
+
+    if err == nil {
+    	defer session.Close()        
+
+        c := session.DB(USERS_DATABASE).C(GAMES_COLLECTION)
+
+        c.Remove(bson.M{"_id":presid})
+        
+        serveDb(w,r)
+    } else {
+    	dbError(w," deleting presentation")
     }        
 }
 
@@ -329,33 +407,39 @@ func subassetsHandler(w http.ResponseWriter, r *http.Request) {
 
 func storePresentation(ws *websocket.Conn,message string){
 	var spm StorePresentationMessage
+
     err := json.Unmarshal([]byte(message), &spm)
 
     if err != nil {
-		fmt.Printf("store pres unmarshal error in : %v",message)    	
+		fmt.Printf("store pres unmarshal error in : %v", message)    	
 		return
     }
 
-    presid:=spm.Presid
-    presg:=spm.Presg
+    presid := spm.Presid
+    presg := spm.Presg
 
-    pres:=presg.Presentation
+    pres := presg.Presentation
 
-    prestitle:=pres.Title
+    prestitle := pres.Title
     
-	fmt.Printf("store pres : %v\nmessage : %v\n",presid,message)
+	fmt.Printf("store pres : %v\nmessage : %v\n", presid, message)
 
 	session, err := mgo.Dial(MONGODB_URI)
+
     if err == nil {
     	defer session.Close()        
-        c := session.DB("users").C(GAMES_COLLECTION)
+
+        c := session.DB(USERS_DATABASE).C(GAMES_COLLECTION)
+
         doc:=bson.M{
         	"_id":presid,
         	"presentationid":presid,
         	"presentationtitle":prestitle,
         	"presentation":pres,
         }
+
         c.Upsert(bson.M{"_id":presid},doc)
+
         ws.WriteMessage(websocket.TextMessage, []byte("StorePresentationResultMessage {\"success\":true}"))
     } else {
     	dbStoreError()

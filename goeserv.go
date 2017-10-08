@@ -394,6 +394,7 @@ func main() {
 	r.HandleFunc("/db", serveDb).Methods("GET")
 	r.HandleFunc("/newpres", newPres).Methods("GET")
 	r.HandleFunc("/presentation/{presid}", servePresentation).Methods("GET")
+	r.HandleFunc("/presentation/delete/{presid}", deletePresentation).Methods("GET")
 	r.HandleFunc("/analysis/{presid}", servePresentation).Methods("GET")
 
 	///////////////////////////////////////////////////////////////////////
