@@ -293,6 +293,12 @@ func startengine(ws *websocket.Conn,name string,myconnid uint64){
 	go ping(stdoutDone)
 }
 
+func killengine() {
+	process.Kill()
+	process = nil
+	log.Println("engine process stopped")
+}
+
 func ping(done chan struct{}) {
 	ticker := time.NewTicker(pingPeriod)
 	defer ticker.Stop()
@@ -301,6 +307,7 @@ func ping(done chan struct{}) {
 		case <-ticker.C:
 			if err := enginews.WriteControl(websocket.PingMessage, []byte{}, time.Now().Add(writeWait)); err != nil {
 				log.Println("ping:", err)
+				killengine()
 			}
 		case <-done:
 			return
@@ -386,6 +393,7 @@ func pumpStdin(ws *websocket.Conn,myconnid uint64) {
 
 				if _, err := processw.Write(message); err != nil {
 					log.Printf("myconnid : %v , error writing engine\n",myconnid)
+					killengine()
 					break
 				}
 			}
