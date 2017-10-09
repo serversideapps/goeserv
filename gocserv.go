@@ -26,74 +26,7 @@ var(
 	MONGODB_URI        = "mongodb://localhost:27017"
 	FIND_MAX           = 500
 	USERS_DATABASE     = "usersgolang"
-	GAMES_COLLECTION   = "gamesgolang"
-
-	TRANSLATIONS map[string]string = map[string]string{		
-		"presentation.engine":"Engine",
-		"presentation.hybernate":"Hybernate",
-		"presentation.nothybernated":"Not hybernated",
-		"presentation.hybernated":"Hybernated",
-		"presentation.changehybernated":"Change",
-		"presentation.archive":"Archive",
-		"presentation.notarchived":"Not archived",
-		"presentation.archived":"Archived",
-		"presentation.changearchived":"Change",
-		"presentation.access.denied":"Access denied!",
-		"presentation.deleted":"Presentation deleted.",
-		"presentation.doesnotexist":"Presentation does not exist!",
-		"ccfg.change":"Change",
-		"ccfg.essay":"Essay",
-		"ccfg.saveessay":"Save essay",
-		"ccfg.savemovenote":"Save",
-		"ccfg.editmovenote":"Edit",
-		"ccfg.nodelink":"Node link",
-		"ccfg.nodeurl":"Node url",
-		"ccfg.version":"Version",
-		"ccfg.white":"White",
-		"ccfg.black":"Black",
-		"ccfg.yellow":"Yellow",
-		"ccfg.red":"Red",
-		"ccfg.variant":"Variant",
-		"ccfg.timecontrol":"Time control",
-		"ccfg.gamesanalysis":"Game analysis",
-		"ccfg.whiteresigned":"White resigned",
-		"ccfg.blackresigned":"Black resigned",
-		"ccfg.whiteflagged":"White flagged",
-		"ccfg.blackflagged":"Black flagged",
-		"ccfg.whitemated":"White mated",
-		"ccfg.blackmated":"Black mated",
-		"ccfg.open":"Open",
-		"ccfg.inprogress":"In progress",
-		"ccfg.terminated":"Terminated",
-		"ccfg.result":"Result",
-		"ccfg.created":"Created",
-		"ccfg.status":"Status",
-		"ccfg.refresh":"Refresh",
-		"ccfg.load":"Load",
-		"ccfg.loadingboard":"Loading board ...",
-		"ccfg.importpgn":"Import PGN : ",
-		"ccfg.savenotes":"Save notes",
-		"ccfg.upload":"Upload",
-		"ccfg.title":"Title",
-		"ccfg.owner":"Owner",
-		"ccfg.id":"Id",
-		"ccfg.gennew":"Generate new",
-		"ccfg.resign":"Resign",
-		"ccfg.stand":"Stand",
-		"ccfg.play":"Play",
-		"ccfg.playai":"Play AI",
-		"ccfg.flip":"Flip",
-		"ccfg.yes":"Yes",
-		"ccfg.no":"No",
-		"ccfg.current":"Current",
-		"ccfg.book":"Book",
-		"ccfg.notes":"Notes",
-		"ccfg.presentation":"Presentation",
-		"ccfg.connecting":"Connecting ...",
-		"ccfg.createtable":"Create table",
-		"ccfg.creatingtable":"Creating table",
-		"ccfg.create":"Create",
-	}
+	GAMES_COLLECTION   = "gamesgolang"	
 )
 
 ///////////////////////////////////////////////////////////////////////////
@@ -131,103 +64,24 @@ func servAssets(w http.ResponseWriter, r *http.Request, path string) {
 
 ///////////////////////////////////////////////////////////////////////////
 
-type User struct {
-	Handle   string   `json:"handle"`
-	Rating   float64  `json:"rating"`
-	Rd       float64  `json:"rd"`
-	Email    string   `json:"email"`
-}
-
-type Presentation struct {
-	Id                 string     `json:"id"`
-	Title              string     `json:"title"`
-	Owner              string     `json:"owner"`
-	Pgn                string     `json:"pgn"`
-	Currentlinealgeb   string     `json:"currentlinealgeb"`
-	Version            int        `json:"version"`
-	Book               Book       `json:"book"`
-	Flip               bool       `json:"flip"`
-	Candelete          string     `json:"candelete"`
-	Canedit            string     `json:"canedit"`
-}
-
-func (pr *Presentation) checksanity() {
-	pr.Book.checksanity()
-}
-
-type Game struct {
-	Presentationid     string  `json:"presentationid"`
-	Presentationtitle  string  `json:"presentationtitle"`
-}
-
-type GameWithPresentation struct {
-	Presentationid     string        `json:"presentationid"`
-	Presentationtitle  string        `json:"presentationtitle"`
-	Presentation       Presentation  `json:"presentation"`
-}
-
-type StorePresentationMessage struct {
-	Presid  string                `json:"presid"`
-	Presg   GameWithPresentation  `json:"presg"`
-}
-
-type BookMove struct {
-	Fen        string       `json:"fen"`
-	San        string       `json:"san"`
-	Annot      string       `json:"annot"`
-	Comment    string       `json:"comment"`
-	Open       bool         `json:"open"`
-	Hasscore   bool         `json:"hasscore"`
-	Scorecp    bool         `json:"scorecp"`
-	Scoremate  bool         `json:"scoremate"`
-	Score      int          `json:"score"`
-	Depth      int          `json:"depth"`
-}
-
-func (bm *BookMove) checksanity() {
-	if (!bm.Scorecp) && (!bm.Scoremate){
-		bm.Scorecp=true
-	}
-}
-
-type BookPosition struct {
-	Fen          string                `json:"fen"`
-	Moves        map[string]BookMove   `json:"moves"`
-	Notes        string                `json:"notes"`
-	Arrowalgebs  []string              `json:"arrowalgebs"`
-}
-
-func (bp *BookPosition) checksanity() {
-	newmoves:=map[string]BookMove{}
-	for san , bm := range bp.Moves {
-		bm.checksanity()
-		newmoves[san]=bm
-	}
-	bp.Moves=newmoves
-}
-
-type Book struct {
-	Positions  map[string]BookPosition    `json:"positions"`
-	Essay      string                     `json:"essay"`
-}
-
-func (bk *Book) checksanity() {
-	newpositions:=map[string]BookPosition{}
-	for fen , bp := range bk.Positions {
-		bp.checksanity()
-		newpositions[fen]=bp
-	}
-	bk.Positions=newpositions
-}
-
-///////////////////////////////////////////////////////////////////////////
-
 func dbError(w http.ResponseWriter,comment string) {
 	fmt.Fprintf(w, "db error "+comment)
 }
 
 func dbStoreError() {
 	log.Println("db store error")
+}
+
+func mainMenu() string {
+	body:=""
+
+	body+="<a href=/>Home</a> | \n"
+	body+="<a href=/db>Presentations</a> | \n"
+	body+="<a href=/newpres>New presentation</a>\n"
+
+	body+="<hr>"
+
+	return body
 }
 
 func serveDb(w http.ResponseWriter, r *http.Request) {
@@ -243,19 +97,22 @@ func serveDb(w http.ResponseWriter, r *http.Request) {
 
         html:="<html><head></head><body><table cellpadding=3 cellspacing=3>"
 
+        html+=mainMenu()
+
         for _ , g:=range result {
         	pres := g.Presentation
         	presid := pres.Id
 
         	html+="<tr>"
         	html+=fmt.Sprintf("<td><a href=/presentation/%v>%v</a></td>", presid, g.Presentationtitle)
+        	html+=fmt.Sprintf("<td><a href=/presentation/raw/%v>Raw</a></td>",presid)
         	if pres.Canedit=="no" {
         		html+="<td>Hybernated</td>"
         	} else if pres.Candelete=="no" {
         		html+="<td>Archived</td>"
     		} else {
     			html+=fmt.Sprintf("<td><a href=/presentation/delete/%v>Delete</a></td>",presid)
-    		}
+    		}    		
 			html+="</tr>"
 		}
 
@@ -275,25 +132,6 @@ func newPres(w http.ResponseWriter, r *http.Request) {
 	gwp.Presentation.Book    = Book{Positions:map[string]BookPosition{}}
 
 	fmt.Fprint(w,presHtml(gwp,-1))
-}
-
-func translationsjson() string {
-	first := true
-
-	body:="{"
-
-	for k , v := range TRANSLATIONS {
-		if first {
-			first=false
-		} else {
-			body+=","
-		}
-		body+="\""+k+"\":\""+v+"\""
-	}
-
-	body+="}"
-
-	return body
 }
 
 func presHtml(gwp GameWithPresentation,currentnodeid int) string {
@@ -392,6 +230,44 @@ func deletePresentation(w http.ResponseWriter, r *http.Request) {
         serveDb(w,r)
     } else {
     	dbError(w," deleting presentation")
+    }        
+}
+
+func rawPresentation(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	presid := vars["presid"]
+
+	session, err := mgo.Dial(MONGODB_URI)
+
+    if err == nil {
+    	defer session.Close()        
+
+        c := session.DB(USERS_DATABASE).C(GAMES_COLLECTION)
+
+		gwp := GameWithPresentation{}
+
+		err := c.Find(bson.M{"presentationid":presid}).One(&gwp)
+
+		if err != nil {
+        	dbError(w,fmt.Sprintf("finding presentation presid %v",presid))
+        	return
+        }        
+
+        gwp.Presentation.checksanity()        
+
+        presgbytes , err := json.Marshal(gwp)
+
+		if err != nil {
+			log.Printf("json marshal error in %v\n",gwp)
+		}
+
+        html:=string(presgbytes)
+
+        w.Header().Set("Content-Type", "text/plain")
+
+		fmt.Fprintf(w, "%v", html)
+    } else {
+    	dbError(w," serving raw presentation")
     }        
 }
 

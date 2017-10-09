@@ -93,10 +93,7 @@ func getEngines() []Engine {
 func createIndex(iname string,ipath string,iconfig string) string {
 	var body string
 
-	body+="<a href=/db>Presentations</a> | \n"
-	body+="<a href=/newpres>New presentation</a>\n"
-
-	body+="<hr>\n"
+	body+=mainMenu()
 
 	body+="<form method=post action='/change'><table>"
 	body+="<tr><td>Name</td><td><input id=name name=name type=text value='"+iname+"'></td>"
@@ -229,7 +226,7 @@ func startengine(ws *websocket.Conn,name string,myconnid uint64){
 	enginews=ws
 	engineconnid=myconnid
 
-	log.Printf("myconnid : %v , starting : %s\n",name,engineconnid)
+	log.Printf("myconnid : %v , starting : %s\n", engineconnid, name)
 
 	index,found:=findbyname(name)
 
@@ -432,6 +429,7 @@ func main() {
 	r.HandleFunc("/newpres", newPres).Methods("GET")
 	r.HandleFunc("/presentation/{presid}", servePresentation).Methods("GET")
 	r.HandleFunc("/presentation/delete/{presid}", deletePresentation).Methods("GET")
+	r.HandleFunc("/presentation/raw/{presid}", rawPresentation).Methods("GET")
 	r.HandleFunc("/analysis/{presid}", servePresentation).Methods("GET")
 
 	///////////////////////////////////////////////////////////////////////
