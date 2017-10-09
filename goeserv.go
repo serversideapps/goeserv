@@ -44,14 +44,17 @@ var (
 	addr               = flag.String("addr", "127.0.0.1:9000", "http service address")
 
 	upgrader           = websocket.Upgrader{
-    ReadBufferSize:  1024,
-    WriteBufferSize: 1024,
-    CheckOrigin: func(r *http.Request) bool {
-        return true
-    },
-}
+	    ReadBufferSize:  1024,
+	    WriteBufferSize: 1024,
+	    CheckOrigin: func(r *http.Request) bool {
+	        return true
+	    },    
+	}
 
 	connid  uint64      = 0
+
+	enginews *websocket.Conn
+    engineconnid uint64
 
 	process *os.Process = nil
 
@@ -197,20 +200,23 @@ func deleteHandler(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprintf(w, createIndex("","",""))
 }
 
-func logem(em EngineMessage){
-	log.Printf("\naction: %v\ncommand: %v\nbuffer: %v\navailable: %v\n",em.Action,em.Command,em.Buffer,em.Available)
+func logem(myconnid uint64, em EngineMessage){
+	log.Printf("# %v %v %v %.40v %v\n",myconnid,em.Action,em.Command,em.Buffer,em.Available)
 }
 
 func sendem(em EngineMessage,ws *websocket.Conn,myconnid uint64,dolog bool){
 	if dolog {
-		log.Printf("\nmyconnid: %d , sending message\n",myconnid)
-		logem(em)
+		logem(myconnid, em)
 	}
 
 	jsonbytes, err := json.Marshal(em)
 
     if err == nil {
-		ws.WriteMessage(websocket.TextMessage, jsonbytes)
+		if err := ws.WriteMessage(websocket.TextMessage, jsonbytes); err != nil {
+			log.Println("error: could not send engine message")
+		}
+    } else {
+    	log.Println("error: marshaling engine message failed")
     }
 }
 
@@ -220,7 +226,10 @@ func internalError(ws *websocket.Conn, msg string, err error) {
 }
 
 func startengine(ws *websocket.Conn,name string,myconnid uint64){
-	log.Printf("\nstarting engine , name: %s , myconnid: %v\n",name,myconnid)
+	enginews=ws
+	engineconnid=myconnid
+
+	log.Printf("myconnid : %v , starting : %s\n",name,engineconnid)
 
 	index,found:=findbyname(name)
 
@@ -237,16 +246,27 @@ func startengine(ws *websocket.Conn,name string,myconnid uint64){
 	path:=engines[index].Path
 
 	outr, outw, err := os.Pipe()
+
+	/*defer outr.Close()
+	defer outw.Close()*/
+	
 	if err != nil {
 		internalError(ws, "stdout:", err)
 		return
 	}	
 
 	inr, inw, err := os.Pipe()
+
+	/*defer inr.Close()
+	defer inw.Close()*/
+
 	if err != nil {
 		internalError(ws, "stdin:", err)
 		return
 	}
+
+	/*inr.Close()
+	outw.Close()*/
 
 	proc, err := os.StartProcess(path, flag.Args(), &os.ProcAttr{
 		Files: []*os.File{inr, outw, outw},
@@ -257,39 +277,55 @@ func startengine(ws *websocket.Conn,name string,myconnid uint64){
 		return
 	}
 
-	process=proc
+	process = proc
 
-	processw=inw
+	processw = inw
 
 	log.Println("process started")
 
-	config:=engines[index].Config
+	config := engines[index].Config
 
 	message := append([]byte(config),'\n')
 
 	if _ , err := processw.Write(message); err==nil {
-		log.Printf("\nissued config: %s",config)
+		log.Printf("issued config : %s",config)
 	}
 
 	stdoutDone := make(chan struct{})
-	go pumpStdout(ws, outr, stdoutDone, myconnid)
+	go pumpStdout(outr, stdoutDone)
+	go ping(stdoutDone)
 }
 
-func pumpStdout(ws *websocket.Conn, r io.Reader, done chan struct{},myconnid uint64) {
+func ping(done chan struct{}) {
+	ticker := time.NewTicker(pingPeriod)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ticker.C:
+			if err := enginews.WriteControl(websocket.PingMessage, []byte{}, time.Now().Add(writeWait)); err != nil {
+				log.Println("ping:", err)
+			}
+		case <-done:
+			return
+		}
+	}
+}
+
+func pumpStdout(r io.Reader, done chan struct{}) {
 	defer func() {
 	}()
 
 	s := bufio.NewScanner(r)
 
 	for s.Scan() {
-		ws.SetWriteDeadline(time.Now().Add(writeWait))
+		enginews.SetWriteDeadline(time.Now().Add(writeWait))
 
 		var em EngineMessage
 
 		em.Action="thinkingoutput"
 		em.Buffer=string(s.Bytes())
 
-		sendem(em,ws,myconnid,false)
+		sendem(em,enginews,engineconnid,true)
 	}
 
 	if s.Err() != nil {
@@ -298,10 +334,10 @@ func pumpStdout(ws *websocket.Conn, r io.Reader, done chan struct{},myconnid uin
 
 	close(done)
 
-	ws.SetWriteDeadline(time.Now().Add(writeWait))
-	ws.WriteMessage(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""))
+	enginews.SetWriteDeadline(time.Now().Add(writeWait))
+	enginews.WriteMessage(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""))
 	time.Sleep(closeGracePeriod)
-	ws.Close()
+	enginews.Close()
 }
 
 func pumpStdin(ws *websocket.Conn,myconnid uint64) {
@@ -321,41 +357,42 @@ func pumpStdin(ws *websocket.Conn,myconnid uint64) {
 			break
 		}
 
-		if parts[0]=="SendTableMessage" {
-			log.Printf("%v ignored",parts[0])
-			break
-		}
+		if (parts[0]=="SendTableMessage") || (parts[0]=="StoreViewMessage") {
+			log.Printf("%v ignored",parts[0])			
+		} else {
+			var em EngineMessage
+	    	json.Unmarshal(message, &em)
+			
+			logem(myconnid, em)
 
-		var em EngineMessage
-    	json.Unmarshal(message, &em)
+			if em.Action=="sendavailable" {
+				var am EngineMessage
+				am.Action="available"
+				var available []string
+				for _,e := range engines {
+					available=append(available,e.Name)
+				}
+				am.Available=available
 
-		log.Printf("\nmyconnid: %d\nraw message: %v\n",myconnid,string(message))
-		logem(em)
-
-		if em.Action=="sendavailable" {
-			var am EngineMessage
-			am.Action="available"
-			var available []string
-			for _,e := range engines {
-				available=append(available,e.Name)
+				sendem(am,ws,myconnid,true)
 			}
-			am.Available=available
 
-			sendem(am,ws,myconnid,true)
-		}
+			if em.Action=="start" {
+				startengine(ws,em.Name,myconnid)
+			}
 
-		if em.Action=="start" {
-			startengine(ws,em.Name,myconnid)
-		}
+			if em.Action=="issue" {
+				enginews=ws
+				engineconnid=myconnid
+				
+				message = append([]byte(em.Command),'\n')
 
-		if em.Action=="issue" {
-			message = append([]byte(em.Command),'\n')
-
-			if _, err := processw.Write(message); err != nil {
-				break
+				if _, err := processw.Write(message); err != nil {
+					log.Printf("myconnid : %v , error writing engine\n",myconnid)
+					break
+				}
 			}
 		}
-
 	}
 }
 
