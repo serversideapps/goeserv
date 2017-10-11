@@ -294,6 +294,9 @@ func startengine(ws *websocket.Conn,name string,myconnid uint64){
 }
 
 func killengine() {
+	if process == nil {
+		return
+	}
 	process.Kill()
 	process = nil
 	log.Println("engine process stopped")
@@ -385,7 +388,7 @@ func pumpStdin(ws *websocket.Conn,myconnid uint64) {
 				startengine(ws,em.Name,myconnid)
 			}
 
-			if em.Action=="issue" {
+			if (em.Action=="issue") && (process != nil) {
 				enginews=ws
 				engineconnid=myconnid
 				
